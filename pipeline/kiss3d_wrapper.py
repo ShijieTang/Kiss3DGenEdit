@@ -35,6 +35,7 @@ from diffusers.models.controlnets.controlnet_flux import FluxMultiControlNetMode
 from diffusers.schedulers import FlowMatchHeunDiscreteScheduler
 from huggingface_hub import hf_hub_download
 
+from typing import Optional
 
 def convert_flux_pipeline(exist_flux_pipe, target_pipe, **kwargs):
     new_pipe = target_pipe(
@@ -170,6 +171,105 @@ def init_wrapper_from_config(config_path):
         reconstruction_model = recon_model,
         llm_model = llm,
         llm_tokenizer = llm_tokenizer
+    )
+
+# @spaces.GPU
+def init_minimum_wrapper_from_config(config_path):
+    with open(config_path, 'r') as config_file:
+        config_ = yaml.load(config_file, yaml.FullLoader)
+
+    dtype_ = {
+        'fp8': torch.float8_e4m3fn,
+        'bf16': torch.bfloat16,
+        'fp16': torch.float16,
+        'fp32': torch.float32
+    }
+
+    # ===================== 1) Init Flux pipeline =====================
+    logger.info('==> Loading Flux model (minimal) ...')
+    flux_cfg = config_['flux']
+
+    flux_device = flux_cfg.get('device', 'cpu')
+    flux_base_model_pth = flux_cfg.get('base_model', None)
+
+    flux_dtype_key = flux_cfg.get('dtype', flux_cfg.get('flux_dtype', 'bf16'))
+    flux_dtype = dtype_[flux_dtype_key]
+
+    flux_lora_pth = flux_cfg.get('lora', None)
+    flux_redux_pth = flux_cfg.get('redux', None)
+
+    if flux_base_model_pth.endswith('safetensors'):
+        flux_pipe = FluxImg2ImgPipeline.from_single_file(
+            flux_base_model_pth,
+            torch_dtype=flux_dtype,
+        )
+    else:
+        flux_pipe = FluxImg2ImgPipeline.from_pretrained(
+            flux_base_model_pth,
+            torch_dtype=flux_dtype,
+        )
+
+    # 统一 scheduler
+    flux_pipe.scheduler = FlowMatchHeunDiscreteScheduler.from_config(
+        flux_pipe.scheduler.config
+    )
+
+    # 加载 LoRA
+    if flux_lora_pth is not None:
+        if not os.path.exists(flux_lora_pth):
+            flux_lora_pth = hf_hub_download(
+                repo_id="LTT/Kiss3DGen",
+                filename="rgb_normal.safetensors",
+                repo_type="model"
+            )
+        logger.info(f"Loading Flux LoRA from: {flux_lora_pth}")
+        flux_pipe.load_lora_weights(flux_lora_pth)
+
+    flux_pipe.to(device=flux_device)
+
+    # ===================== 2) 可选 Redux（要就留，不要就删 yaml 里 redux） =====================
+    flux_redux_pipe = None
+    if flux_redux_pth is not None:
+        logger.info(f"==> Loading Flux Redux model from {flux_redux_pth} ...")
+        flux_redux_pipe = FluxPriorReduxPipeline.from_pretrained(
+            flux_redux_pth,
+            torch_dtype=torch.bfloat16,
+        )
+        # 复用主 Flux 的 text encoder / tokenizer
+        flux_redux_pipe.text_encoder = flux_pipe.text_encoder
+        flux_redux_pipe.text_encoder_2 = flux_pipe.text_encoder_2
+        flux_redux_pipe.tokenizer = flux_pipe.tokenizer
+        flux_redux_pipe.tokenizer_2 = flux_pipe.tokenizer_2
+        flux_redux_pipe.to(device=flux_device)
+
+    logger.warning(
+        f"GPU memory allocated after load flux model on {flux_device}: "
+        f"{torch.cuda.memory_allocated(device=flux_device) / 1024**3} GB"
+    )
+
+    # ===================== 3) 其余模块全部置 None =====================
+    multiview_pipeline = None
+    caption_processor = None
+    caption_model = None
+    recon_model_config = None
+    recon_model = None
+    llm = None
+    llm_tokenizer = None
+
+    print("Initialized minimum kiss3d_wrapper.")
+
+    # ===================== 4) 返回 wrapper =====================
+    return kiss3d_wrapper(
+        config=config_,
+        flux_pipeline=flux_pipe,
+        flux_redux_pipeline=flux_redux_pipe,
+        multiview_pipeline=multiview_pipeline,
+        caption_processor=caption_processor,
+        caption_model=caption_model,
+        reconstruction_model_config=recon_model_config,
+        reconstruction_model=recon_model,
+        llm_model=llm,
+        llm_tokenizer=llm_tokenizer,
     )
 
 def seed_everything(seed):
@@ -584,6 +684,112 @@ class kiss3d_wrapper(object):
         reconstruction_stage2_steps=int(reconstruction_stage2_steps)
         )
 
+    def generate_3d_bundle_image_text_edit(
+        self,
+        prompt_src: str,
+        prompt_tgt: str,
+        lora_scale: float = 1.0,
+        num_inference_steps: Optional[int] = None,
+        seed: Optional[int] = None,
+        redux_hparam: Optional[dict] = None,
+        save_intermediate_results: bool = True,
+        p2p_tau: float = 0.5,
+        **kwargs,
+    ):
+        """
+        使用 FluxPipeline.edit 在 3D bundle 空间做 text-based editing: prompt_src -> prompt_tgt
+
+        返回:
+            bundle_src: torch.Tensor, (3, 1024, 2048), [0, 1]
+            bundle_tgt: torch.Tensor, (3, 1024, 2048), [0, 1]
+            （如果 save_intermediate_results=True，同时返回两个保存路径）
+        """
+
+        # 1) 取到带 edit(...) 的 flux pipeline
+        flux_pipeline = self.flux_pipeline
+        assert hasattr(flux_pipeline, "edit"), "self.flux_pipeline 必须实现 edit(...) 才能使用 generate_3d_bundle_image_text_edit"
+
+        flux_device = self.config["flux"].get("device", "cpu")
+        seed = seed or self.config["flux"].get("seed", 0)
+        num_inference_steps = num_inference_steps or self.config["flux"].get("num_inference_steps", 20)
+
+        generator = torch.Generator(device=flux_device).manual_seed(seed)
+
+        # 2) 和原函数一致的 multi-view base prompt
+        base_prompt = "A grid of 2x4 multi-view image, elevation 5. White background."
+
+        # T5 使用的详细描述：base_prompt + 具体语义
+        prompt_2_src = " ".join([base_prompt, prompt_src])
+        prompt_2_tgt = " ".join([base_prompt, prompt_tgt])
+
+        # 3) 组装传给 edit(...) 的参数（注意 key 名和 edit 的签名严格对应）
+        hparam_dict = {
+            "prompt_src": base_prompt,      # 给 CLIP 的 source 文本（短 prompt）
+            "prompt_tgt": base_prompt,      # 给 CLIP 的 target 文本
+            "prompt_2_src": prompt_2_src,   # 给 T5 的 source 文本（长 prompt）
+            "prompt_2_tgt": prompt_2_tgt,   # 给 T5 的 target 文本（长 prompt）
+            "height": 1024,
+            "width": 2048,
+            "num_inference_steps": num_inference_steps,
+            "sigmas": None,
+            "guidance_scale": 3.5,
+            "num_images_per_prompt": 1,
+            "generator": generator,
+            "latents": None,
+            "output_type": "np",            # 为了后面转成 torch.Tensor
+            "p2p_tau": p2p_tau,
+            "joint_attention_kwargs": {"scale": lora_scale},
+            "max_sequence_length": 512,
+        }
+        hparam_dict.update(kwargs)
+
+        # 4) 可选 redux 分支（如果你不需要，可以整个删掉）
+        if redux_hparam is not None:
+            assert self.flux_redux_pipeline is not None
+
+            redux_hparam_ = {
+                "prompt": hparam_dict["prompt_tgt"],
+                "prompt_2": hparam_dict["prompt_2_tgt"],
+            }
+            redux_hparam_.update(redux_hparam)
+
+            with self.context():
+                redux_output = self.flux_redux_pipeline(**redux_hparam_)
+
+            # redux_output 里一般是对 latents 或别的 conditioning 的修改
+            hparam_dict.update(redux_output)
+
+        # 5) 调用 FluxPipeline.edit 获得 source / target 两张 3D bundle 图
+        with self.context():
+            image_src, image_tgt = flux_pipeline.edit(**hparam_dict)
+
+        # 6) 转成 (3, 1024, 2048) 的 torch.Tensor
+        bundle_src = (
+            torch.from_numpy(image_src)
+            .squeeze(0)
+            .permute(2, 0, 1)
+            .contiguous()
+            .float()
+        )
+        bundle_tgt = (
+            torch.from_numpy(image_tgt)
+            .squeeze(0)
+            .permute(2, 0, 1)
+            .contiguous()
+            .float()
+        )
+
+        # 7) 按需保存两张 bundle 图
+        if save_intermediate_results:
+            save_path_src = os.path.join(TMP_DIR, f"{self.uuid}_src_3d_bundle_image.png")
+            save_path_tgt = os.path.join(TMP_DIR, f"{self.uuid}_tgt_3d_bundle_image.png")
+            torchvision.utils.save_image(bundle_src, save_path_src)
+            torchvision.utils.save_image(bundle_tgt, save_path_tgt)
+            logger.info(f"Save source 3D bundle image to {save_path_src}")
+            logger.info(f"Save target 3D bundle image to {save_path_tgt}")
+            return bundle_src, bundle_tgt, save_path_src, save_path_tgt
+
+        return bundle_src, bundle_tgt
 
 def run_text_to_3d(k3d_wrapper,
                    prompt,
@@ -613,6 +819,55 @@ def run_text_to_3d(k3d_wrapper,
                                                               isomer_radius=4.2, reconstruction_stage2_steps=50)
 
     return gen_save_path, recon_mesh_path
+
+def run_edit_3d_bundle(k3d_wrapper,
+                       prompt_src,
+                       prompt_tgt, 
+                       p2p_tau=0.5):
+    """
+    使用 Flux 的 edit 接口，从源提示词 prompt_src 到目标提示词 prompt_tgt，
+    生成一对 3D bundle images（源 / 目标），不进行 3D 重建。
+
+    返回:
+        bundle_src: torch.Tensor, 形状 (3, 1024, 2048), [0., 1.]
+        bundle_tgt: torch.Tensor, 形状 (3, 1024, 2048), [0., 1.]
+        save_path_src: str, 源 bundle 保存路径
+        save_path_tgt: str, 目标 bundle 保存路径
+    """
+    # Renew the uuid
+    k3d_wrapper.renew_uuid()
+
+    # refine prompts（你也可以只 refine target，看你 get_detailed_prompt 的实现习惯）
+    logger.info(f'Source prompt: "{prompt_src}"')
+    logger.info(f'Target prompt: "{prompt_tgt}"')
+
+    prompt_src_refined = k3d_wrapper.get_detailed_prompt(prompt_src)
+    prompt_tgt_refined = k3d_wrapper.get_detailed_prompt(prompt_tgt)
+
+    start = time.time()
+    image_src, image_tgt = k3d_wrapper.generate_3d_bundle_image_text_edit(
+        prompt_src=prompt_src_refined,
+        prompt_tgt=prompt_tgt_refined,
+        p2p_tau=p2p_tau,
+        save_intermediate_results=True
+    )
+    print(f"3d bundle image edit time: {time.time() - start}")
+
+    # image_src, image_tgt: 预期为 np.ndarray, 形状 (1, H, W, 3)
+    bundle_src = torch.from_numpy(image_src).squeeze(0).permute(2, 0, 1).contiguous().float()  # (3, 1024, 2048)
+    bundle_tgt = torch.from_numpy(image_tgt).squeeze(0).permute(2, 0, 1).contiguous().float()  # (3, 1024, 2048)
+
+    # 保存中间结果
+    save_path_src = os.path.join(TMP_DIR, f"{k3d_wrapper.uuid}_edit_src_3d_bundle_image.png")
+    save_path_tgt = os.path.join(TMP_DIR, f"{k3d_wrapper.uuid}_edit_tgt_3d_bundle_image.png")
+
+    torchvision.utils.save_image(bundle_src, save_path_src)
+    torchvision.utils.save_image(bundle_tgt, save_path_tgt)
+
+    logger.info(f"Save source 3D bundle image to {save_path_src}")
+    logger.info(f"Save target 3D bundle image to {save_path_tgt}")
+
+    return bundle_src, bundle_tgt, save_path_src, save_path_tgt
 
 def image2mesh_preprocess(k3d_wrapper, input_image_, seed, use_mv_rgb=True):
     seed_everything(seed)
