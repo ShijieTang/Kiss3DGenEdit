@@ -13,7 +13,7 @@
 # limitations under the License.
 import inspect
 import math
-from typing import Callable, List, Optional, Tuple, Union
+from typing import Callable, List, Optional, Tuple, Union, Dict, Any
 
 import torch
 import torch.nn.functional as F
@@ -2069,7 +2069,12 @@ class FusedAuraFlowAttnProcessor2_0:
 
 
 class FluxAttnProcessor2_0:
-    """Attention processor used typically in processing the SD3-like self-attention projections."""
+    """Attention processor used typically in processing the SD3-like self-attention projections.
+
+    这里加入 P2P 钩子：
+    - 只对 image tokens 的 q/k 做缓存/替换
+    - text 分支 (encoder_hidden_states) 的 q/k 不动
+    """
 
     def __init__(self):
         if not hasattr(F, "scaled_dot_product_attention"):
@@ -2082,10 +2087,20 @@ class FluxAttnProcessor2_0:
         encoder_hidden_states: torch.FloatTensor = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         image_rotary_emb: Optional[torch.Tensor] = None,
+        # ===== 新增：来自 joint_attention_kwargs 的参数 =====
+        p2p_mode: Optional[str] = None,           # "record" / "edit" / None
+        p2p_step: Optional[int] = None,
+        p2p_tau_index: Optional[int] = None,
+        p2p_enable: Optional[bool] = None,
+        p2p_state: Optional[Dict[str, Any]] = None,
+
+        block_index: Optional[int] = None,        # 第几层
+        block_type: Optional[str] = None,         # "mmdit" / "single" 等
     ) -> torch.FloatTensor:
+        # 如果有 encoder_hidden_states，就用它的 batch_size
         batch_size, _, _ = hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
 
-        # `sample` projections.
+        # 1) image 分支的投影
         query = attn.to_q(hidden_states)
         key = attn.to_k(hidden_states)
         value = attn.to_v(hidden_states)
@@ -2102,9 +2117,39 @@ class FluxAttnProcessor2_0:
         if attn.norm_k is not None:
             key = attn.norm_k(key)
 
-        # the attention in FluxSingleTransformerBlock does not use `encoder_hidden_states`
+        # ======= P2P 钩子：只对 image q/k 做缓存 / 替换 =======
+        use_p2p_img = (
+            p2p_enable and p2p_mode in ["record", "edit"]
+        )
+
+        if use_p2p_img:
+
+            layer_key = f"{block_type or 'block'}_{block_index}"
+
+            # 初始化缓存 dict
+            img_q_cache = p2p_state.setdefault("img_q_cache", {})
+            img_k_cache = p2p_state.setdefault("img_k_cache", {})
+
+            if p2p_mode == "record":
+                # 记录 source run 的 image q/k
+                img_q_cache[layer_key] = query.detach().clone()
+                img_k_cache[layer_key] = key.detach().clone()
+
+            elif p2p_mode == "edit":
+                # 用 source run 缓存的 image q/k 覆盖当前 image q/k
+                cached_q = img_q_cache.get(layer_key, None)
+                cached_k = img_k_cache.get(layer_key, None)
+
+                if cached_q is not None and cached_k is not None:
+                    if cached_q.shape == query.shape and cached_k.shape == key.shape:
+                        query = cached_q.to(device=query.device, dtype=query.dtype)
+                        key = cached_k.to(device=key.device, dtype=key.dtype)
+                    else:
+                        print(f"Warning: cached_q/key shape does not match current query/key shape in layer {layer_key}. Skipping P2P replacement.")
+                    # 形状对不上就静默跳过
+
+        # 2) text 分支（encoder_hidden_states）的投影 —— 不做 P2P 修改
         if encoder_hidden_states is not None:
-            # `context` projections.
             encoder_hidden_states_query_proj = attn.add_q_proj(encoder_hidden_states)
             encoder_hidden_states_key_proj = attn.add_k_proj(encoder_hidden_states)
             encoder_hidden_states_value_proj = attn.add_v_proj(encoder_hidden_states)
@@ -2124,38 +2169,42 @@ class FluxAttnProcessor2_0:
             if attn.norm_added_k is not None:
                 encoder_hidden_states_key_proj = attn.norm_added_k(encoder_hidden_states_key_proj)
 
-            # attention
+            # 注意：这里只是把 text 的 q/k/v 拼接到前面，不对它做 P2P
             query = torch.cat([encoder_hidden_states_query_proj, query], dim=2)
             key = torch.cat([encoder_hidden_states_key_proj, key], dim=2)
             value = torch.cat([encoder_hidden_states_value_proj, value], dim=2)
 
+        # 3) RoPE 对 text+image 整体应用
         if image_rotary_emb is not None:
             from .embeddings import apply_rotary_emb
 
             query = apply_rotary_emb(query, image_rotary_emb)
             key = apply_rotary_emb(key, image_rotary_emb)
 
+        # 4) 标准 PyTorch 2.0 fused attention
         hidden_states = F.scaled_dot_product_attention(
             query, key, value, attn_mask=attention_mask, dropout_p=0.0, is_causal=False
         )
         hidden_states = hidden_states.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
         hidden_states = hidden_states.to(query.dtype)
 
+        # 5) 拆回 text / image 输出
         if encoder_hidden_states is not None:
             encoder_hidden_states, hidden_states = (
                 hidden_states[:, : encoder_hidden_states.shape[1]],
                 hidden_states[:, encoder_hidden_states.shape[1] :],
             )
 
-            # linear proj
+            # image 输出投影+dropout
             hidden_states = attn.to_out[0](hidden_states)
-            # dropout
             hidden_states = attn.to_out[1](hidden_states)
 
+            # text 输出线性层
             encoder_hidden_states = attn.to_add_out(encoder_hidden_states)
 
             return hidden_states, encoder_hidden_states
         else:
+            # 单独 image self-attn 的情况（single block）
             return hidden_states
 
 

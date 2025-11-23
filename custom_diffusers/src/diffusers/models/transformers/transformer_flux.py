@@ -483,6 +483,13 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         image_rotary_emb = self.pos_embed(ids)
 
         for index_block, block in enumerate(self.transformer_blocks):
+            # === 新增：为每一层构造自己的 joint kwargs，带上层信息 ===
+            block_joint_attention_kwargs = None
+            if joint_attention_kwargs is not None:
+                block_joint_attention_kwargs = joint_attention_kwargs.copy()
+                block_joint_attention_kwargs["block_index"] = index_block
+                block_joint_attention_kwargs["block_type"] = "mmdit"
+
             if torch.is_grad_enabled() and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
@@ -501,6 +508,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     encoder_hidden_states,
                     temb,
                     image_rotary_emb,
+                    block_joint_attention_kwargs,  # <- 传入这一层自己的 kwargs
                     **ckpt_kwargs,
                 )
 
@@ -510,7 +518,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     encoder_hidden_states=encoder_hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
-                    joint_attention_kwargs=joint_attention_kwargs,
+                    joint_attention_kwargs=block_joint_attention_kwargs,  # <- 这一层自己的 kwargs
                 )
 
             # controlnet residual
@@ -528,6 +536,13 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
         hidden_states = torch.cat([encoder_hidden_states, hidden_states], dim=1)
 
         for index_block, block in enumerate(self.single_transformer_blocks):
+            # === 新增：single block 也带上层信息 ===
+            block_joint_attention_kwargs = None
+            if joint_attention_kwargs is not None:
+                block_joint_attention_kwargs = joint_attention_kwargs.copy()
+                block_joint_attention_kwargs["block_index"] = index_block
+                block_joint_attention_kwargs["block_type"] = "single"
+
             if torch.is_grad_enabled() and self.gradient_checkpointing:
 
                 def create_custom_forward(module, return_dict=None):
@@ -545,6 +560,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     hidden_states,
                     temb,
                     image_rotary_emb,
+                    block_joint_attention_kwargs,  # <- 传自己的 kwargs
                     **ckpt_kwargs,
                 )
 
@@ -553,7 +569,7 @@ class FluxTransformer2DModel(ModelMixin, ConfigMixin, PeftAdapterMixin, FromOrig
                     hidden_states=hidden_states,
                     temb=temb,
                     image_rotary_emb=image_rotary_emb,
-                    joint_attention_kwargs=joint_attention_kwargs,
+                    joint_attention_kwargs=block_joint_attention_kwargs,  # <- 传自己的 kwargs
                 )
 
             # controlnet residual
