@@ -27,20 +27,30 @@ def split_bundle_image(bundle_img: Image.Image, rows: int, cols: int) -> List[Im
     return views
 
 
+def default_view_suffixes_4() -> List[str]:
+    """Default 4-view suffixes for RGB views only (top half of bundle)."""
+    return [
+        " Cartoon-styled rendering, left side view, on a clean white background.",
+        " Cartoon-styled rendering, back view, on a clean white background.",
+        " Cartoon-styled rendering, right side view, on a clean white background.",
+        " Cartoon-styled rendering, front view, on a clean white background.",
+    ]
+
+
 def default_view_suffixes_8() -> List[str]:
     """Default 8-view suffixes: 4 natural-color + 4 geometry-only."""
     return [
         # 4 natural-color / cartoon-like views
-        "Cartoon-styled rendering, left side view, on a clean white background.",
-        "Cartoon-styled rendering, back view, on a clean white background.",
-        "Cartoon-styled rendering, right side view, on a clean white background.",
-        "Cartoon-styled rendering, front view, on a clean white background.",
+        " Cartoon-styled rendering, left side view, on a clean white background.",
+        " Cartoon-styled rendering, back view, on a clean white background.",
+        " Cartoon-styled rendering, right side view, on a clean white background.",
+        " Cartoon-styled rendering, front view, on a clean white background.",
 
         # 4 geometry-only pseudo-color views
-        "Geometry-only rendering with smooth rainbow colors, left side view, on a clean white background.",
-        "Geometry-only rendering with smooth rainbow colors, back view, on a clean white background.",
-        "Geometry-only rendering with smooth rainbow colors, right side view, on a clean white background.",
-        "Geometry-only rendering with smooth rainbow colors, front view, on a clean white background.",
+        " Geometry-only rendering with smooth rainbow colors, left side view, on a clean white background.",
+        " Geometry-only rendering with smooth rainbow colors, back view, on a clean white background.",
+        " Geometry-only rendering with smooth rainbow colors, right side view, on a clean white background.",
+        " Geometry-only rendering with smooth rainbow colors, front view, on a clean white background.",
     ]
 
 
@@ -160,6 +170,8 @@ class MVClipEvaluator:
         if view_suffixes is None:
             if n_views == 8:
                 view_suffixes = default_view_suffixes_8()
+            elif n_views == 4:
+                view_suffixes = default_view_suffixes_4()
             else:
                 view_suffixes = ["" for _ in range(n_views)]
 
