@@ -346,6 +346,105 @@ def plot_focused_correlations(comparison_df):
 
 
 # ============================================================================
+# Plot 3c: Two-Panel Correlation (A and B only)
+# ============================================================================
+def plot_focused_correlations_ac(comparison_df):
+    """
+    Two-panel visualization with key correlations:
+    A. MVCLIP Internal Consistency (mvclip_src_src ↔ mvclip_src_tgt)
+    B. Semantic × MVCLIP Improvement (tgt_semantic ↔ mvclip_improvement)
+    """
+    fig = plt.figure(figsize=(12, 5))
+
+    key_correlations = [
+        {
+            'pair': ('mvclip_src_src', 'mvclip_src_tgt'),
+            'title': 'A. MVCLIP Internal Consistency',
+            'interpretation': 'Source MVCLIP features\nstable before/after editing',
+        },
+        {
+            'pair': ('tgt_semantic', 'mvclip_improvement'),
+            'title': 'B. Semantic × MVCLIP Improvement',
+            'interpretation': 'Target semantic quality\ncorrelates with MVCLIP gain',
+        },
+    ]
+
+    for idx, corr_info in enumerate(key_correlations):
+        ax = fig.add_subplot(1, 2, idx + 1)
+
+        x_col, y_col = corr_info['pair']
+
+        if x_col not in comparison_df.columns or y_col not in comparison_df.columns:
+            ax.text(0.5, 0.5, f'Data not available\n({x_col}, {y_col})',
+                   ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        valid_mask = comparison_df[x_col].notna() & comparison_df[y_col].notna()
+        x_data = comparison_df.loc[valid_mask, x_col]
+        y_data = comparison_df.loc[valid_mask, y_col]
+
+        if len(x_data) < 2:
+            ax.text(0.5, 0.5, f'Insufficient data\n({x_col}, {y_col})',
+                   ha='center', va='center', transform=ax.transAxes)
+            continue
+
+        corr_val = x_data.corr(y_data)
+
+        for mode in comparison_df['edit_mode'].unique():
+            mode_mask = valid_mask & (comparison_df['edit_mode'] == mode)
+            mode_x = comparison_df.loc[mode_mask, x_col]
+            mode_y = comparison_df.loc[mode_mask, y_col]
+            if len(mode_x) > 0:
+                ax.scatter(mode_x, mode_y,
+                          c=COLORS.get(mode, '#333333'),
+                          label=EDIT_MODE_LABELS.get(mode, mode),
+                          alpha=0.7, s=60, edgecolors='white', linewidth=0.5)
+
+        z = np.polyfit(x_data.values, y_data.values, 1)
+        p = np.poly1d(z)
+        x_line = np.linspace(x_data.min(), x_data.max(), 100)
+        ax.plot(x_line, p(x_line), '--', color='#555555', alpha=0.8, linewidth=1.5)
+
+        label_map = {
+            'mvclip_src_src': 'MVCLIP (Src→Src)',
+            'mvclip_src_tgt': 'MVCLIP (Src→Tgt)',
+            'mvclip_improvement': 'MVCLIP Improvement',
+            'tgt_semantic': 'Target Semantic (%)',
+        }
+        x_label = label_map.get(x_col, x_col.replace('_', ' ').title())
+        y_label = label_map.get(y_col, y_col.replace('_', ' ').title())
+
+        ax.set_xlabel(x_label)
+        ax.set_ylabel(y_label)
+        ax.set_title(corr_info['title'], fontweight='bold', fontsize=12)
+
+        corr_color = '#2E86AB' if corr_val > 0 else '#A23B72'
+        ax.annotate(f'r = {corr_val:.2f}',
+                   xy=(0.95, 0.95), xycoords='axes fraction',
+                   ha='right', va='top', fontsize=14, fontweight='bold',
+                   color=corr_color,
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='white',
+                            edgecolor=corr_color, alpha=0.9))
+
+        ax.annotate(corr_info['interpretation'],
+                   xy=(0.05, 0.05), xycoords='axes fraction',
+                   ha='left', va='bottom', fontsize=9, style='italic',
+                   color='#666666',
+                   bbox=dict(boxstyle='round,pad=0.3', facecolor='#f8f8f8',
+                            edgecolor='#cccccc', alpha=0.9))
+
+        if idx == 0:
+            ax.legend(loc='upper left', fontsize=9)
+
+    fig.suptitle('Key Correlations Analysis', fontsize=15, fontweight='bold', y=1.02)
+
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / '03c_focused_correlations_ac.png')
+    plt.close()
+    print("  Saved: 03c_focused_correlations_ac.png")
+
+
+# ============================================================================
 # Plot 4: Radar/Spider Chart
 # ============================================================================
 def plot_radar_chart(summary_df):
@@ -672,6 +771,7 @@ def main():
     plot_tau_effect(summary_df)
     plot_correlation_heatmap(comparison_df)
     plot_focused_correlations(comparison_df)
+    plot_focused_correlations_ac(comparison_df)
     plot_radar_chart(summary_df)
     plot_entry_heatmap(comparison_df)
     plot_tradeoff_scatter(comparison_df)
