@@ -1,0 +1,10 @@
+{
+  "rf_gamma": 0.9,
+  "rf_eta": 0.4,
+  "rf_stop": 0.5,
+  "guidance_scale": 2.0,
+  "num_steps": 28,
+  "bundles": [
+    "examples_RF/girl.png"
+  ]
+}
