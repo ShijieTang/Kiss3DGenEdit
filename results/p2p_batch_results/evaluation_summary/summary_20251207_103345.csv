@@ -1,0 +1,16 @@
+category,experiment,edit_mode,tau,avg_src_consistency,avg_src_semantic,avg_tgt_consistency,avg_tgt_semantic,avg_lpips,avg_mvclip_src_src,avg_mvclip_src_tgt,avg_mvclip_tgt_src,avg_mvclip_tgt_tgt,avg_mvclip_improvement,avg_mvclip_preservation,num_entries,num_success,num_failed
+diff_tau,mode_qk_img_tau-1,qk_img,-1,91.00,50.00,59.00,60.00,0.2236,-0.1037,-1.3016,-0.9188,-0.1643,+0.7544,+1.1979,5,5,0
+diff_tau,mode_qk_img_tau0.1,qk_img,0.1,80.60,48.00,70.60,26.00,0.0954,-0.1037,-0.9489,-0.9188,-0.1793,+0.7395,+0.8452,5,5,0
+diff_tau,mode_qk_img_tau0.3,qk_img,0.3,99.60,56.00,50.60,20.00,0.0570,-0.1037,-0.8995,-0.9188,-0.6001,+0.3187,+0.7958,5,5,0
+diff_editmode_diff_identity,mode_qk_full_tau0.2,qk_full,0.2,95.00,40.00,100.00,25.00,0.0402,1.4932,1.3517,-2.0619,-0.9746,+1.0874,+0.1416,1,1,0
+diff_editmode_diff_identity,mode_qk_img_tau0.15,qk_img,0.15,100.00,55.00,100.00,45.00,0.0569,1.4932,1.1515,-2.0619,-0.2958,+1.7662,+0.3418,1,1,0
+diff_editmode_diff_identity,mode_full_tau0.1,full,0.1,95.00,75.00,100.00,5.00,0.0246,1.4932,0.8243,-2.0619,-2.1685,-0.1066,+0.6690,1,1,0
+diff_editmode_diff_identity,mode_qk_img_tau0.1,qk_img,0.1,95.00,45.00,100.00,85.00,0.1167,1.4932,-0.9045,-2.0619,-0.5963,+1.4657,+2.3977,1,1,0
+diff_editmode_diff_identity,mode_qk_full_tau0.15,qk_full,0.15,100.00,55.00,100.00,10.00,0.0433,1.4932,0.4199,-2.0619,-1.1702,+0.8917,+1.0734,1,1,0
+diff_editmode_diff_identity,mode_qk_full_tau0.1,qk_full,0.1,100.00,60.00,45.00,75.00,0.1164,1.4932,-0.3854,-2.0619,-0.6531,+1.4088,+1.8786,1,1,0
+diff_editmode_diff_identity,mode_full_tau0.15,full,0.15,100.00,55.00,100.00,5.00,0.0178,1.4932,0.6184,-2.0619,-2.1962,-0.1343,+0.8748,1,1,0
+diff_editmode_diff_identity,mode_qk_img_tau0.2,qk_img,0.2,95.00,55.00,100.00,25.00,0.0495,1.4932,1.2711,-2.0619,-1.4285,+0.6334,+0.2222,1,1,0
+diff_editmode_diff_identity,mode_full_tau0.2,full,0.2,100.00,60.00,100.00,15.00,0.0081,1.4932,1.3350,-2.0619,-2.0229,+0.0391,+0.1583,1,1,0
+diff_editmode_same_identity,mode_qk_full_tau0.2,qk_full,0.2,90.00,50.00,72.50,25.00,0.0671,-0.2443,-1.1346,-1.2635,-0.8602,+0.4033,+0.8902,4,4,0
+diff_editmode_same_identity,mode_qk_img_tau0.2,qk_img,0.2,81.50,50.00,97.50,21.25,0.0762,-0.2443,-1.1382,-1.2635,-0.7052,+0.5583,+0.8939,4,4,0
+diff_editmode_same_identity,mode_full_tau0.2,full,0.2,85.00,47.50,63.75,16.25,0.0250,-0.2443,-0.7689,-1.2635,-0.8727,+0.3908,+0.5246,4,4,0
