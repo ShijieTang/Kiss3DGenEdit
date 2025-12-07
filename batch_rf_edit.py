@@ -39,6 +39,7 @@ IMG_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 class BundleEntry:
     name: str
     image_path: Path
+    prompt_path: Path
     prompt: str
 
 
@@ -84,7 +85,7 @@ def discover_bundle_entries(bundle_root: Path) -> List[BundleEntry]:
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
         if not prompt_text:
             raise ValueError(f"Prompt in {prompt_path} is empty.")
-        entries.append(BundleEntry(folder.name, bundle_image, prompt_text))
+        entries.append(BundleEntry(folder.name, bundle_image, prompt_path, prompt_text))
 
     # Support a single folder that directly contains bundle/prompt.
     _collect_from_folder(bundle_root)
@@ -190,7 +191,7 @@ def main() -> None:
         logger.info(" - %s (%s)", entry.name, entry.image_path)
 
     bundle_images = load_bundle_images(entries)
-    prompts = [entry.prompt for entry in entries]
+    entry_payloads = list(zip(entries, bundle_images))
 
     param_grid = build_param_grid(args.rf_gamma, args.rf_eta, args.rf_stop, args.guidance_scale)
     logger.info("Running %d hyperparameter configuration(s).", len(param_grid))
@@ -219,28 +220,26 @@ def main() -> None:
             guidance,
         )
 
-        _, _, _, save_path_tgt = run_edit_3d_bundle_rf(
-            k3d_wrapper,
-            bundle_img=bundle_images,
-            prompt_tgt=prompts,
-            rf_gamma=gamma,
-            rf_eta=eta,
-            rf_stop=stop,
-            num_steps=args.num_steps,
-            guidance_scale=guidance,
-        )
+        for entry, bundle_img in entry_payloads:
+            _, _, _, save_path_tgt = run_edit_3d_bundle_rf(
+                k3d_wrapper,
+                bundle_img=bundle_img,
+                prompt_tgt=entry.prompt,
+                rf_gamma=gamma,
+                rf_eta=eta,
+                rf_stop=stop,
+                num_steps=args.num_steps,
+                guidance_scale=guidance,
+            )
 
-        if isinstance(save_path_tgt, str):
-            save_paths = [save_path_tgt]
-        else:
-            save_paths = list(save_path_tgt)
-
-        for entry, tmp_path in zip(entries, save_paths):
+            tmp_tgt = save_path_tgt[0] if isinstance(save_path_tgt, list) else save_path_tgt
             sample_dir = combo_dir / entry.name
             sample_dir.mkdir(parents=True, exist_ok=True)
-            dst_path = sample_dir / f"{entry.name}_rf_bundle.png"
-            shutil.copy2(tmp_path, dst_path)
-            logger.info("Saved RF result to %s", dst_path)
+            dst_src = sample_dir / f"{entry.name}_src_bundle{entry.image_path.suffix.lower()}"
+            dst_tgt = sample_dir / f"{entry.name}_tgt_bundle.png"
+            shutil.copy2(entry.image_path, dst_src)
+            shutil.copy2(tmp_tgt, dst_tgt)
+            logger.info("Saved RF source/target to %s and %s", dst_src, dst_tgt)
 
         meta = {
             "rf_gamma": gamma,
@@ -248,10 +247,18 @@ def main() -> None:
             "rf_stop": stop,
             "guidance_scale": guidance,
             "num_steps": args.num_steps,
-            "bundles": [str(entry.image_path) for entry in entries],
+            "entries": [
+                {
+                    "name": entry.name,
+                    "bundle_image_path": str(entry.image_path),
+                    "prompt_path": str(entry.prompt_path),
+                    "prompt": entry.prompt,
+                }
+                for entry in entries
+            ],
         }
         with open(combo_dir / "config.json", "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2)
+            json.dump(meta, f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import itertools
 import json
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,6 +44,7 @@ IMG_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 class BundleEntry:
     name: str
     image_path: Path
+    prompt_path: Path
     prompt: str
 
 
@@ -96,7 +98,7 @@ def discover_bundle_entries(bundle_root: Path) -> List[BundleEntry]:
         prompt_text = prompt_path.read_text(encoding="utf-8").strip()
         if not prompt_text:
             raise ValueError(f"Prompt in {prompt_path} is empty.")
-        entries.append(BundleEntry(folder.name, bundle_image, prompt_text))
+        entries.append(BundleEntry(folder.name, bundle_image, prompt_path, prompt_text))
 
     _collect_from_folder(bundle_root)
 
@@ -405,9 +407,12 @@ def main() -> None:
                 sample_dir = combo_dir / entry.name
                 sample_dir.mkdir(parents=True, exist_ok=True)
 
-                dst_path = sample_dir / f"{entry.name}_controlnet.png"
-                vutils.save_image(gen_bundle.clamp(0.0, 1.0), dst_path)
-                logger.info("Saved ControlNet edit to %s", dst_path)
+                src_ext = entry.image_path.suffix.lower() or ".png"
+                dst_src = sample_dir / f"{entry.name}_src_bundle{src_ext}"
+                dst_tgt = sample_dir / f"{entry.name}_tgt_bundle.png"
+                shutil.copy2(entry.image_path, dst_src)
+                vutils.save_image(gen_bundle.clamp(0.0, 1.0), dst_tgt)
+                logger.info("Saved ControlNet source/target to %s and %s", dst_src, dst_tgt)
 
             meta = {
                 "strength": strength,
@@ -425,7 +430,8 @@ def main() -> None:
                 "entries": [
                     {
                         "name": payload.entry.name,
-                        "image_path": str(payload.entry.image_path),
+                        "bundle_image_path": str(payload.entry.image_path),
+                        "prompt_path": str(payload.entry.prompt_path),
                         "prompt": payload.entry.prompt,
                     }
                     for payload in payloads
