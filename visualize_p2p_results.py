@@ -218,38 +218,39 @@ def plot_correlation_heatmap(comparison_df):
 # ============================================================================
 def plot_focused_correlations(comparison_df):
     """
-    Focused visualization of key meaningful correlations:
-    1. MVCLIP internal correlation (mvclip_src_src ↔ mvclip_src_tgt)
-    2. LPIPS-MVCLIP synergy
-    3. Cross-modal consistency (src_consistency ↔ mvclip_src_src)
+    Focused visualization of key meaningful correlations (all r > 0.5):
+    1. MVCLIP internal correlation (mvclip_src_src ↔ mvclip_src_tgt): r=0.82
+    2. Cross-modal consistency (src_consistency ↔ mvclip_src_src): r=0.56
+    3. tgt_semantic ↔ mvclip_improvement: r=0.55
+    4. tgt_semantic ↔ mvclip_preservation: r=0.52
     """
     fig = plt.figure(figsize=(14, 10))
 
-    # Define the key correlation pairs with their interpretations
+    # Define the key correlation pairs (all r > 0.5)
     key_correlations = [
         {
             'pair': ('mvclip_src_src', 'mvclip_src_tgt'),
             'title': 'A. MVCLIP Internal Consistency',
-            'interpretation': 'Source MVCLIP features remain\nconsistent before/after editing',
+            'interpretation': 'Source MVCLIP features\nstable before/after editing',
             'category': 'Preservation Validation'
         },
         {
-            'pair': ('lpips', 'mvclip_improvement'),
-            'title': 'B. LPIPS × MVCLIP Improvement',
-            'interpretation': 'Pixel-level changes correlate\nwith semantic improvements',
-            'category': 'Edit Magnitude Coherence'
-        },
-        {
-            'pair': ('lpips', 'mvclip_preservation'),
-            'title': 'C. LPIPS × MVCLIP Preservation',
-            'interpretation': 'Visual changes linked to\nfeature preservation capacity',
-            'category': 'Edit Magnitude Coherence'
-        },
-        {
             'pair': ('src_consistency', 'mvclip_src_src'),
-            'title': 'D. Consistency × MVCLIP',
-            'interpretation': 'AI consistency scores validate\nMVCLIP feature measurements',
+            'title': 'B. AI Score × MVCLIP',
+            'interpretation': 'AI consistency validates\nMVCLIP measurements',
             'category': 'Cross-modal Validation'
+        },
+        {
+            'pair': ('tgt_semantic', 'mvclip_improvement'),
+            'title': 'C. Semantic × MVCLIP Improvement',
+            'interpretation': 'Target semantic quality\ncorrelates with MVCLIP gain',
+            'category': 'Edit Quality'
+        },
+        {
+            'pair': ('tgt_semantic', 'mvclip_preservation'),
+            'title': 'D. Semantic × MVCLIP Preservation',
+            'interpretation': 'Semantic quality linked to\nfeature preservation',
+            'category': 'Edit Quality'
         },
     ]
 
@@ -296,8 +297,16 @@ def plot_focused_correlations(comparison_df):
         ax.plot(x_line, p(x_line), '--', color='#555555', alpha=0.8, linewidth=1.5)
 
         # Labels and formatting
-        x_label = x_col.replace('_', ' ').replace('mvclip', 'MVCLIP').replace('src', 'Src').replace('tgt', 'Tgt').title()
-        y_label = y_col.replace('_', ' ').replace('mvclip', 'MVCLIP').replace('src', 'Src').replace('tgt', 'Tgt').title()
+        label_map = {
+            'mvclip_src_src': 'MVCLIP (Src→Src)',
+            'mvclip_src_tgt': 'MVCLIP (Src→Tgt)',
+            'mvclip_improvement': 'MVCLIP Improvement',
+            'mvclip_preservation': 'MVCLIP Preservation',
+            'src_consistency': 'Source Consistency (%)',
+            'tgt_semantic': 'Target Semantic (%)',
+        }
+        x_label = label_map.get(x_col, x_col.replace('_', ' ').title())
+        y_label = label_map.get(y_col, y_col.replace('_', ' ').title())
 
         ax.set_xlabel(x_label)
         ax.set_ylabel(y_label)
